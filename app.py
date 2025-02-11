@@ -126,6 +126,7 @@ def create_main_window(sp, username, city):
     greeting_label = tk.Label(root, text=f"Hey, {username}!", font=("Helvetica", 16))
     greeting_label.pack(pady=5)
 
+
     # City acknowledgment
     location_label = tk.Label(root, text=f"How's the weather in {city}?", font=("Helvetica", 12))
     location_label.pack(pady=5)
