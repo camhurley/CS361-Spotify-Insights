@@ -56,6 +56,7 @@ def get_current_track(sp):
     return title, artist, album_cover_url
 
 
+
 def get_user_location():
     """
     Simple IP-based geolocation lookup.
@@ -80,7 +81,7 @@ def show_login_screen():
 
     login_window = tk.Tk()
     login_window.title("Spotify Insights")
-    login_window.geometry("300x300")
+    login_window.geometry("400x300")
 
     prompt_label = tk.Label(login_window, text="Welcome to Spotify Insights!\nClick below to sign in with Spotify.\n You will need to grant permissions to the app.")
     prompt_label.pack(pady=10)
@@ -104,7 +105,7 @@ def show_login_screen():
     sign_in_button.pack(pady=5)
     disclaimer_label = tk.Label(login_window, text="None of your personal information will be shared.")
     disclaimer_label.pack(pady=10)
-    version_label = tk.Label(login_window, text="v0.1\nAutomatically gets your current playing track.")
+    version_label = tk.Label(login_window, text="v0.2\nSee how many times you've played your currently playing track!")
     version_label.pack(pady=10)
     login_window.mainloop()
 
@@ -123,7 +124,7 @@ def create_main_window(sp, username, city):
 
     # Greeting with spotify username
     greeting_label = tk.Label(root, text=f"Hey, {username}!", font=("Helvetica", 16))
-    greeting_label.pack(pady=10)
+    greeting_label.pack(pady=5)
 
     # City acknowledgment
     location_label = tk.Label(root, text=f"How's the weather in {city}?", font=("Helvetica", 12))
@@ -136,7 +137,7 @@ def create_main_window(sp, username, city):
 
     # Album cover label
     album_label = tk.Label(root)
-    album_label.pack(pady=10)
+    album_label.pack(pady=5)
 
     # Function to refresh data in the UI
     def refresh_data():
@@ -164,7 +165,22 @@ def create_main_window(sp, username, city):
     refresh_data()
     refresh_button = tk.Button(root, text="Refresh", command=refresh_data, font=("Helvetica", 12), bg="#1DB954",
                                fg="white")
-    refresh_button.pack(pady=20)
+    refresh_button.pack(pady=5)
+
+    # Dropdown for playcount (DUMMY)
+    row_frame = tk.Frame(root)
+    row_frame.pack(pady=5)
+    dummy_plays = 3
+
+    # Left part of the playcount text.
+    left_label = tk.Label(row_frame, text=f"You've listened to this track {dummy_plays} times in the last ")
+    left_label.pack(side=tk.LEFT)
+
+    # Dropdown for playcount range
+    time_range_var = tk.StringVar(value="day")  # default
+    time_range_options = ["day", "week", "month"]
+    dropdown = ttk.OptionMenu(row_frame, time_range_var, *time_range_options)
+    dropdown.pack(side=tk.LEFT)
 
     # Start main event loop
     root.mainloop()
