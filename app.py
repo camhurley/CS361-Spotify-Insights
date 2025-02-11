@@ -99,7 +99,8 @@ def show_login_screen():
         except Exception as e:
             prompt_label.config(text=f"Error: {e}")
 
-    sign_in_button = tk.Button(login_window, text="Connect to Spotify", command=handle_sign_in, width=30)
+    sign_in_button = tk.Button(login_window, text="Connect to Spotify", command=handle_sign_in, width=30, font=("Helvetica", 12), bg="#1DB954",
+                               fg="white")
     sign_in_button.pack(pady=5)
     disclaimer_label = tk.Label(login_window, text="None of your personal information will be shared.")
     disclaimer_label.pack(pady=10)
