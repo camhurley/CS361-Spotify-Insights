@@ -7,6 +7,14 @@ from io import BytesIO
 import spotipy  # https://spotipy.readthedocs.io/en/2.25.0/
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
+import zmq
+
+# ZeroMQ setup
+context = zmq.Context()
+socket = context.socket(zmq.REP)
+socket.bind("tcp://*:4949")
+print('Waiting for message...')
+
 
 # Spotify API environment loading
 load_dotenv('auth.env')
@@ -55,6 +63,19 @@ def get_current_track(sp):
 
     return title, artist, album_cover_url
 
+def get_track_id(sp):
+    """
+    Gets the current track ID. Returns the ID string.
+    """
+    # Pull the current track "item"
+    current = sp.current_user_playing_track()
+
+    # Something is playing so pull the ID
+    if current and current.get('item'):
+        return current['item']['id']
+
+    # Nothing is playing...
+    return None
 
 
 def get_user_location():
@@ -140,6 +161,13 @@ def create_main_window(sp, username, city):
     album_label = tk.Label(root)
     album_label.pack(pady=5)
 
+    track_id_label = tk.Label(root, text="Loading track ID...", font=("Helvetica", 12), wraplength=350,
+                              justify="center")
+    track_id_label.pack(pady=10)
+
+    # Define our "last track" and init. to None (will be filled by refresh_data below)
+    last_id = None
+
     # Function to refresh data in the UI
     def refresh_data():
         title, artist, album_cover_url = get_current_track(sp)
@@ -148,15 +176,28 @@ def create_main_window(sp, username, city):
         else:
             track_info_label.config(text=f"You're not currently listening to anything.")
 
+        # Store our last track ID to avoid duplicates
+        nonlocal last_id
+
+        # Get ID
+        current_id = get_track_id(sp)
+        track_id_label.config(text=f"Track ID: {current_id}")
+
+        # Loop to send ID to tempo service ONLY if it is a new ID
+        if current_id and current_id != last_id:
+            print(f"New track detected: {current_id}")
+            # ZEROMQ STUFF WILL GO HERE
+            last_id = current_id
 
         # Update album cover
         if album_cover_url:
             response = requests.get(album_cover_url)
             img_data = Image.open(BytesIO(response.content))
-            img_data = img_data.resize((300, 300))
+            img_data = img_data.resize((250, 250))
             album_cover = ImageTk.PhotoImage(img_data)
             album_label.config(image=album_cover) # type: ignore[arg-type]
             album_label.image = album_cover
+
         else:
             album_label.config(image="", text="[Empty]")
 
