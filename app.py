@@ -1,31 +1,28 @@
 import os
-import tkinter as tk  # https://docs.python.org/3/library/tk.html
-from tkinter import ttk
-from PIL import Image, ImageTk
-import requests
-from io import BytesIO
-import spotipy  # https://spotipy.readthedocs.io/en/2.25.0/
+import time
+import spotipy
+import zmq
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
-import zmq
 
-# ZeroMQ setup
-context = zmq.Context()
-socket = context.socket(zmq.REP)
-socket.bind("tcp://*:4949")
-print('Waiting for message...')
+# Load Spotify Credentials
 
-
-# Spotify API environment loading
 load_dotenv('auth.env')
 SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
 SPOTIPY_REDIRECT_URI = os.getenv("SPOTIPY_REDIRECT_URI")
 
-# Spotipy's scope. CHECK HERE IF THERE'S PERMISSION ERRORS
-SCOPE = "user-read-recently-played user-read-currently-playing user-read-playback-state"
+# Updated Spotify scope to also allow modifying playlists (user-modify-playlist)
+SCOPE = (
+    "user-read-recently-played "
+    "user-read-currently-playing "
+    "user-read-playback-state "
+    "playlist-read-private "
+    "playlist-modify-public "
+    "playlist-modify-private"
+)
 
-# Functions
+# Spotify + ZeroMQ Setup
 
 def connect_to_spotify():
     """
@@ -42,229 +39,255 @@ def connect_to_spotify():
     return sp
 
 
-def get_current_track(sp):
+def init_pub_socket():
     """
-    Returns last played song, by the last played artist, with the last played album cover
+    Initialize a ZeroMQ PUB socket for broadcasting track changes.
+    PUB allows this to have multiple microservices work off the same burst of info.
     """
+    context = zmq.Context()
+    publisher = context.socket(zmq.PUB)
+    publisher.bind("tcp://localhost:5556")
+    print("ZeroMQ publisher bound to tcp://localhost:5556")
+    return publisher
 
-    # Defining our currently-playing track
+def init_playcount_req_socket():
+    """
+    REQ socket for the playcount microservice at tcp://localhost:5557
+    """
+    context = zmq.Context()
+    socket = context.socket(zmq.REQ)
+    socket.connect("tcp://localhost:5557")
+    print("Connected to playcount microservice at tcp://localhost:5557")
+    return socket
+
+def init_bpm_req_socket():
+    """
+    REQ socket for the BPM microservice at tcp://localhost:5558
+    """
+    context = zmq.Context()
+    socket = context.socket(zmq.REQ)
+    socket.connect("tcp://localhost:5558")
+    print("Connected to BPM microservice at tcp://localhost:5558")
+    return socket
+
+# Spotify Utility Functions
+
+def get_current_track_info(sp):
+    """
+    Returns (track_id, title, artist, album_name) if something is playing, else (None, None, None, None).
+    """
     current = sp.current_user_playing_track()
-
     if current and current.get('item'):
         track = current['item']
+        track_id = track['id']
         title = track['name']
-        artist = ", ".join([artist['name'] for artist in track['artists']])
-        album_images = track['album'].get('images', [])
-        album_cover_url = album_images[0]['url'] if album_images else None
-    else:
-        title = None
-        artist = None
-        album_cover_url = None
+        artists = ", ".join([artist['name'] for artist in track['artists']])
+        album_name = track['album']['name']
+        return track_id, title, artists, album_name
+    return None, None, None, None
 
-    return title, artist, album_cover_url
 
-def get_track_id(sp):
+def get_user_playlists(sp):
     """
-    Gets the current track ID. Returns the ID string.
+    Fetches a list of the user's playlists.
+    Returns a list of (playlist_id, playlist_name).
     """
-    # Pull the current track "item"
-    current = sp.current_user_playing_track()
-
-    # Something is playing so pull the ID
-    if current and current.get('item'):
-        return current['item']['id']
-
-    # Nothing is playing...
-    return None
+    playlists = []
+    results = sp.current_user_playlists(limit=50)
+    for item in results.get('items', []):
+        pid = item['id']
+        name = item['name']
+        playlists.append((pid, name))
+    return playlists
 
 
-def get_user_location():
+def add_track_to_playlist(sp, track_id, playlist_id):
     """
-    Simple IP-based geolocation lookup.
-    Returns the user's city, or 'Unknown' if it fails.
+    Adds a single track to the specified playlist.
     """
+    if not track_id or not playlist_id:
+        return False
     try:
-        response = requests.get("http://ip-api.com/json/")
-        data = response.json()
-        city = data.get("city", "Unknown")
-        return city
+        sp.playlist_add_items(playlist_id, [track_id])
+        return True
     except Exception as e:
-        print(f"Geolocation error: {e}")
-        return "Unknown"
+        print(f"Error adding track: {e}")
+        return False
 
 
-# Main UI (Tkinter is kinda cool but kinda brutal lol)
+########################
+# CLI Menu / Main Loop
+########################
 
-def show_login_screen():
+def show_menu():
     """
-    Start page with a login button (even if .cache exists on the local copy already)
+    Prints a small menu and returns the user's choice.
     """
+    print("\n--- MENU ---")
+    print("1) Check for Track Changes (and publish them)")
+    print("2) Show my Playlists")
+    print("3) Add Current Track to a Playlist")
+    print("4) Quit")
+    choice = input("Enter choice: ")
+    return choice.strip()
 
-    login_window = tk.Tk()
-    login_window.title("Spotify Insights")
-    login_window.geometry("400x300")
 
-    prompt_label = tk.Label(login_window, text="Welcome to Spotify Insights!\nClick below to sign in with Spotify.\n You will need to grant permissions to the app.")
-    prompt_label.pack(pady=10)
-
-    def handle_sign_in():
-        try:
-            # 1. Connect to Spotify
-            sp = connect_to_spotify()
-            user = sp.current_user()
-
-            # 2. Close the login window
-            login_window.destroy()
-
-            # 3. Open the main UI, etc.
-            create_main_window(sp, user["display_name"])
-        except Exception as e:
-            prompt_label.config(text=f"Error: {e}")
-
-    sign_in_button = tk.Button(login_window, text="Connect to Spotify", command=handle_sign_in, width=30, font=("Helvetica", 12), bg="#1DB954",
-                               fg="white")
-    sign_in_button.pack(pady=5)
-    disclaimer_label = tk.Label(login_window, text="None of your personal information will be shared.")
-    disclaimer_label.pack(pady=10)
-    version_label = tk.Label(login_window, text="v0.2\nSee how many times you've played your currently playing track!")
-    version_label.pack(pady=10)
-    login_window.mainloop()
-
-# Displays the login screen
-show_login_screen()
-
-def create_main_window(sp, username, city):
+def cli_main():
     """
-    Create the main window once signed in
+    CLI-based main function.
+    - Connects to Spotify
+    - Publishes track changes over ZeroMQ when requested
+    - Allows the user to view playlists or add the current track to a chosen playlist
     """
+    print("Welcome to Spotify Insights!")
+    print("This app is meant to give info on your listening and let you manage playlists.")
+    print("A Spotify login is required. Your personal information will NOT be shared.")
+    print("Note: A log file (history.log) will be generated in this program's root folder.")
+    print("This log file auto-updates with your current track for your own analysis.")
+    print("")
+    input("Press Enter to connect to Spotify.")
 
-    # Main Window
-    root = tk.Tk()
-    root.title("Spotify Insights")
-    root.geometry("400x600")  # NOT FINAL rework maybe after trending.
+    print("Connecting to Spotify...")
+    sp = connect_to_spotify()
 
-    # Greeting with spotify username
-    greeting_label = tk.Label(root, text=f"Hey, {username}!", font=("Helvetica", 16))
-    greeting_label.pack(pady=5)
+    print("Initializing ZeroMQ publisher...")
+    publisher = init_pub_socket()
 
+    print("Initializing ZeroMQ REQ socket for playcount...")
+    playcount_req = init_playcount_req_socket()
 
-    # City acknowledgment
-    location_label = tk.Label(root, text=f"How's the weather in {city}?", font=("Helvetica", 12))
-    location_label.pack(pady=5)
+    print("Initializing ZeroMQ REQ socket for bpm...")
+    bpm_req = init_bpm_req_socket()
 
-    # Last played track
-    track_info_label = tk.Label(root, text="Loading track info...", font=("Helvetica", 12), wraplength=350,
-                                justify="center")
-    track_info_label.pack(pady=10)
+    # Attempt to get user info
+    try:
+        user = sp.current_user()
+        username = user.get("display_name", "User")
+    except Exception as e:
+        print(f"Error fetching user info: {e}")
+        return
 
-    # Album cover label
-    album_label = tk.Label(root)
-    album_label.pack(pady=5)
+    print(f"Hello, {username}!")
+    print("Use the menu below to navigate.\n")
 
-    track_id_label = tk.Label(root, text="Loading track ID...", font=("Helvetica", 12), wraplength=350,
-                              justify="center")
-    track_id_label.pack(pady=10)
+    last_track_id = None
 
-    # Define our "last track" and init. to None (will be filled by refresh_data below)
-    last_id = None
+    while True:
+        choice = show_menu()
 
-    # Function to refresh data in the UI
-    def refresh_data():
-        title, artist, album_cover_url = get_current_track(sp)
-        if title:
-            track_info_label.config(text=f"You're currently listening to \n{title} by {artist}.")
+        if choice == "1":
+
+            # Check for track changes, and if there's a new track, publish a JSON message
+            track_id, title, artists, album = get_current_track_info(sp)
+
+            if track_id is None:
+                print("No track is currently playing.")
+                last_track_id = None
+
+            else:
+
+                if track_id != last_track_id:
+                    # It's a new track, or we just started playing again
+                    print(f"You are now listening to '{title}' by {artists}.")
+                    # Publish the info
+                    message = {
+                        "track_id": track_id,
+                        "title": title,
+                        "artist": artists,
+                        "album": album
+                    }
+                    publisher.send_json(message)
+                    time.sleep(0.1)
+
+                    # Playcount display
+                    playcount_id = {"track_id": track_id}
+                    playcount_req.send_json(playcount_id)
+                    response_str = playcount_req.recv_string()
+                    try:
+                        count = int(response_str)
+                        print(f"You've listened to this track {count} times.")
+                    except ValueError:
+                        print("Error: invalid response from the playcount microservice.")
+
+                    # Request the BPM
+                    bpm_req.send_json({"track_id": track_id})
+                    bpm_response = bpm_req.recv_json()
+                    if "bpm" in bpm_response:
+                        tempo = bpm_response["bpm"]
+                        speed = bpm_response["speed"]  # "faster than", "the same as", etc.
+                        print(f"This track's tempo is {tempo} BPM, {speed} the previous track.")
+                    else:
+                        print("Error: invalid response from BPM microservice.")
+
+                    last_track_id = track_id
+
+                    input("Press Enter to go back to the main menu.")
+
+                else:
+                    print("Same track as before; no new update.")
+
+        elif choice == "2":
+
+            # Show the user's playlists
+            print("Fetching your playlists...")
+            print("Please note: Spotify's API does NOT allow access to your built-in Liked Songs.")
+
+            playlists = get_user_playlists(sp)
+
+            if not playlists:
+                print("No playlists found.")
+            else:
+                for idx, (pid, name) in enumerate(playlists, start=1):
+                    print(f"{idx}. {name}")
+
+        elif choice == "3":
+
+            # Add current track to a chosen playlist
+            track_id, title, artists, album = get_current_track_info(sp)
+
+            if track_id is None:
+                print("No track is currently playing, cannot add to playlist.")
+            else:
+                print(f"Current track: '{title}' by {artists}")
+
+                playlists = get_user_playlists(sp)
+
+                if not playlists:
+                    print("No playlists found, cannot add track.")
+                else:
+                    print("\nSelect a playlist to add this track:")
+                    print("Please note: Spotify's API does NOT allow access to your built-in Liked Songs.")
+
+                    for idx, (pid, pname) in enumerate(playlists, start=1):
+                        print(f"{idx}. {pname}")
+                    try:
+                        selection = int(input("Enter playlist number (or press Enter to cancel): "))
+
+                        # User cancels.
+                        if not selection:
+                            print("Canceled adding track to a playlist.")
+                            continue
+
+                        chosen_pid, chosen_name = playlists[selection - 1]
+                        success = add_track_to_playlist(sp, track_id, chosen_pid)
+
+                        if success:
+                            print(f"Track '{title}' added to playlist '{chosen_name}'.")
+                        else:
+                            print("Failed to add track to the playlist.")
+
+                    except (ValueError, IndexError):
+                        print("Invalid selection.")
+
+        elif choice == "4":
+
+            # Quit
+            print("Goodbye!")
+            break
+
         else:
-            track_info_label.config(text=f"You're not currently listening to anything.")
-
-        # Store our last track ID to avoid duplicates
-        nonlocal last_id
-
-        # Get ID
-        current_id = get_track_id(sp)
-        track_id_label.config(text=f"Track ID: {current_id}")
-
-        # Loop to send ID to tempo service ONLY if it is a new ID
-        if current_id and current_id != last_id:
-            print(f"New track detected: {current_id}")
-            # ZEROMQ STUFF WILL GO HERE
-            last_id = current_id
-
-        # Update album cover
-        if album_cover_url:
-            response = requests.get(album_cover_url)
-            img_data = Image.open(BytesIO(response.content))
-            img_data = img_data.resize((250, 250))
-            album_cover = ImageTk.PhotoImage(img_data)
-            album_label.config(image=album_cover) # type: ignore[arg-type]
-            album_label.image = album_cover
-
-        else:
-            album_label.config(image="", text="[Empty]")
-
-        root.after(3000, refresh_data)
-
-    # Initial data load
-    refresh_data()
-    refresh_button = tk.Button(root, text="Refresh", command=refresh_data, font=("Helvetica", 12), bg="#1DB954",
-                               fg="white")
-    refresh_button.pack(pady=5)
-
-    # Dropdown for playcount (DUMMY)
-    row_frame = tk.Frame(root)
-    row_frame.pack(pady=5)
-    dummy_plays = 3
-
-    # Left part of the playcount text.
-    left_label = tk.Label(row_frame, text=f"You've listened to this track {dummy_plays} times in the last ")
-    left_label.pack(side=tk.LEFT)
-
-    # Dropdown for playcount range
-    time_range_var = tk.StringVar(value="day")  # default
-    time_range_options = ["day", "week", "month"]
-    dropdown = ttk.OptionMenu(row_frame, time_range_var, *time_range_options)
-    dropdown.pack(side=tk.LEFT)
-
-    # Start main event loop
-    root.mainloop()
-
-
-# Splash screen
-
-def show_splash():
-    """
-    Show a splash screen while connecting to Spotify.
-    After successful connection, destroy the splash and open the main window.
-    """
-    splash = tk.Tk()
-    splash.title("Connecting to Spotify")
-    splash.geometry("300x150")
-
-    # Center the splash text
-    label = ttk.Label(splash, text="Connecting to Spotify...\nPlease wait.", font=("Helvetica", 12))
-    label.pack(expand=True, pady=20)
-
-    # Attempt Spotify connection on the next GUI cycle
-    def attempt_connection():
-        try:
-            # Connect to Spotify
-            sp = connect_to_spotify()
-            user = sp.current_user()
-            username = user["display_name"]
-            city = get_user_location()
-
-            # If successful, close splash
-            splash.destroy()
-
-            # Open the main app window
-            create_main_window(sp, username, city)
-        except Exception as e:
-            label.config(text=f"Error:\n{e}")
-
-    # Schedule the connection attempt shortly after splash appears
-    splash.after(200, attempt_connection)
-
-    splash.mainloop()
+            print("Invalid choice. Please select from the menu options.")
 
 
 if __name__ == "__main__":
-    show_splash()
+    cli_main()
