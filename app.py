@@ -28,6 +28,7 @@ def connect_to_spotify():
     """
     Connects to Spotify using Spotipy and returns a Spotify client instance.
     """
+
     sp = spotipy.Spotify(
         auth_manager=SpotifyOAuth(
             client_id=SPOTIPY_CLIENT_ID,
@@ -68,6 +69,16 @@ def init_bpm_req_socket():
     socket = context.socket(zmq.REQ)
     socket.connect("tcp://localhost:5558")
     print("Connected to BPM microservice at tcp://localhost:5558")
+    return socket
+
+def init_top_artists_req_socket():
+    """
+    REQ socket for the top artists microservice at tcp://localhost:5559
+    """
+    context = zmq.Context()
+    socket = context.socket(zmq.REQ)
+    socket.connect("tcp://localhost:5559")
+    print("Connected to Top Artists microservice at tcp://localhost:5559")
     return socket
 
 # Spotify Utility Functions
@@ -127,7 +138,8 @@ def show_menu():
     print("1) Check for Track Changes (and publish them)")
     print("2) Show my Playlists")
     print("3) Add Current Track to a Playlist")
-    print("4) Quit")
+    print("4) View my Top Artists")
+    print("5) Quit")
     choice = input("Enter choice: ")
     return choice.strip()
 
@@ -158,6 +170,9 @@ def cli_main():
 
     print("Initializing ZeroMQ REQ socket for bpm...")
     bpm_req = init_bpm_req_socket()
+
+    print("Initializing ZeroMQ REQ socket for top artists microservice...")
+    top_artists_req = init_top_artists_req_socket()
 
     # Attempt to get user info
     try:
@@ -279,9 +294,38 @@ def cli_main():
                     except (ValueError, IndexError):
                         print("Invalid selection.")
 
+
         elif choice == "4":
 
-            # Quit
+            # View top artists
+            print("How many artists do you want to see? (1 - 20)")
+            limit_str = input("Enter a number: ").strip()
+            if not limit_str:
+                print("Canceled.")
+                continue
+
+            try:
+                limit = int(limit_str)
+                top_artists_req.send_json({"limit": limit})
+                response = top_artists_req.recv_json()
+
+                if "error" in response:
+                    print(f"Error from top artists microservice: {response['error']}")
+                else:
+                    artist_list = response.get("artists", [])
+                    if not artist_list:
+                        print("No top artists found (are you sure you've listened enough?)")
+                    else:
+                        print(f"Your top {len(artist_list)} artist(s):")
+                        for i, artist_name in enumerate(artist_list, start=1):
+                            print(f"{i}. {artist_name}")
+
+            except ValueError:
+                print("Invalid input. Must be a number from 1 to 20.")
+
+
+        elif choice == "5":
+
             print("Goodbye!")
             break
 
