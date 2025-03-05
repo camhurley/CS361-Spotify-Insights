@@ -14,7 +14,7 @@ def main():
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.bind("tcp://localhost:5557")
-    print("Playcount microservice (REP) is listening on tcp://localhost:5557")
+    print("Playcount microservice is listening on tcp://localhost:5557")
 
     while True:
 

@@ -19,7 +19,7 @@ def main():
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.bind("tcp://localhost:5558")
-    print("BPM microservice listening on tcp://localhost:5558 (REQ/REP)")
+    print("BPM microservice is listening on tcp://localhost:5558")
 
     global last_bpm
 
